@@ -1,0 +1,403 @@
+<html>
+<head>
+    <style>
+        div#centerDiv {
+            width: 450px;
+            margin: auto;
+        }
+
+            div#centerDiv * {
+                font: icon;
+            }
+
+        textarea#txtDataDisplay {
+            width: 100%;
+            height: 150px;
+            margin: 20px 0px;
+            display: none;
+        }
+
+        table#tblData {
+            border: solid 1px black;
+            border-collapse: collapse;
+            display: none;
+            width: 100%;
+        }
+
+            table#tblData tr > td, table#tblData tr > th {
+                padding: 2px 10px;
+            }
+
+            table#tblData > tHead > tr {
+                background-color: #EEE;
+            }
+
+            table#tblData > tbody > tr.dataValid {
+                background-color: #CFC;
+            }
+
+            table#tblData > tbody > tr.dataError {
+                background-color: #FCC;
+            }
+
+        #btnProcess {
+            display: none;
+        }
+
+        #result {
+            margin-top:20px;
+            display:none;
+        }
+    </style>
+    <script language="javascript">
+        function fileReadContent(obj_inputUpload, fileReadCallBack) {
+            if (obj_inputUpload.files.length === 0) {
+                return "";
+            }
+
+            let obj_file = obj_inputUpload.files[0];
+            let obj_reader = new FileReader();
+
+            obj_reader.addEventListener(
+                "load",
+                () => {
+                    fileReadCallBack(obj_reader.result);
+                },
+                false,
+            );
+
+            if (obj_file) {
+                obj_reader.readAsText(obj_file);
+            }
+        }
+
+
+        //remove all childs for DOM element
+        function DOMClearChildElements(obj_root) {
+            while (obj_root && obj_root.childNodes.length > 0) {
+                obj_root.removeChild(obj_root.childNodes[0]);
+            }
+        }
+
+
+        //displayed in datagrid
+        function dataShow(str_data, obj_tableTBodyOutput, rowValidation) {
+            str_data = str_data.trim()
+            DOMClearChildElements(obj_tableTBodyOutput);
+
+
+            renderRow = function (bool_validationResult, arr_str_data) {
+                var obj_tr = document.createElement('tr');
+                obj_tr.className = ((bool_validationResult) ? 'dataValid' : 'dataError');
+
+                let obj_cell = document.createElement('th');
+                obj_cell.appendChild(document.createTextNode((bool_validationResult) ? 'Ok' : 'Err'));
+                obj_tr.appendChild(obj_cell);
+
+                var int_maxCellLength = obj_tableTBodyOutput.parentNode.tHead.rows[0].cells.length;
+
+                arr_str_data.forEach((str_data, idx) => {
+                    let obj_cell = document.createElement('th');
+                    obj_cell.appendChild(document.createTextNode(str_data));
+                    obj_tr.appendChild(obj_cell);
+                });
+
+                return obj_tr;
+            }
+
+            dataShowSingleRow = function (str_rowData, idx) {
+                arr_str_data = str_rowData.split(',');
+
+                arr_str_data.forEach((str_value) => { return str_value.trim() })
+
+                var bool_validationResult = rowValidation(arr_str_data);
+
+                if (idx > 0 || bool_validationResult) { //skip if header present in data
+                    arr_str_data.length = obj_tableTBodyOutput.parentNode.tHead.rows[0].cells.length - 1;
+                    let tempRow = renderRow(bool_validationResult, arr_str_data);
+
+                    obj_tableTBodyOutput.appendChild(tempRow);
+                }
+            }
+
+
+            var arr_str_rows = str_data.split('\n');
+            arr_str_rows.forEach((str_rowData, idx) => { dataShowSingleRow(str_rowData, idx); });
+            document.getElementById('tblData').style.display = 'table';
+            document.getElementById('btnProcess').style.display = 'block';
+        }
+
+        function isInteger(str_data) {
+            return (str_data.length > 0 && parseInt(str_data) == str_data)
+
+        }
+
+        function isDate(str_data) {
+            return !isNaN(Date.parse(str_data));
+        }
+
+
+        //Validation per row
+        function dataRowIsValid(arr_str_rowData) {
+            if (arr_str_rowData.length != 4) { // check number of columns
+                return false;
+            }
+
+            if (!isInteger(arr_str_rowData[0])) { // user must be integer
+                return false;
+            }
+
+            if (!isInteger(arr_str_rowData[1])) { // project must be integer
+                return false;
+            }
+
+            if (!isDate(arr_str_rowData[2])) { // start date must be date
+                return false;
+            }
+
+            if (!isDate(arr_str_rowData[3]) && arr_str_rowData[3] !== 'NULL') { //end date must be date or NULL
+                return false;
+            }
+
+            if (new Date(Date.parse(arr_str_rowData[2])) > new Date()) { //startDate must be in the past
+                return false;
+            }
+
+            if (arr_str_rowData[3] !== 'NULL' && new Date(Date.parse(arr_str_rowData[3])) > new Date()) { //end date must be in the past or NULL
+                return false;
+            }
+
+            if (arr_str_rowData[3] !== 'NULL' && new Date(Date.parse(arr_str_rowData[3])) < new Date(Date.parse(arr_str_rowData[2]))) { //start date must be before end date
+                return false;
+            }
+
+            return true;
+        }
+
+
+        //Normalize data for processing:
+        //returns array of arrays :
+        //format:
+        //[
+        //  [user, project, daysStartByOffset, daysEndByOffset]
+        //]
+        function dataNormalize(str_data, rowValidation) {
+            var arr_data = [];
+            var int_dayInMiliseconds = 86400000;
+            var dateToDays = function (str_date, defaultReturnValue) {
+                var obj_dateTemp = defaultReturnValue;
+                if (isDate(str_date)) {
+                    obj_dateTemp = new Date(Date.parse(str_date));
+                }
+
+                return parseInt(Date.parse(obj_dateTemp) / int_dayInMiliseconds);
+            }
+
+            var rowNormalize = function (str_rowData, rowValidation) {
+                var arr_str_data = str_rowData.split(',');
+                var obj_today = new Date();
+                obj_today.setHours(0, 0, 0, 0);
+
+                arr_str_data.forEach((str_value) => { return str_value.trim() })
+
+                if (rowValidation(arr_str_data)) {
+                    arr_str_data[0] = parseInt(arr_str_data[0]);
+                    arr_str_data[1] = parseInt(arr_str_data[1]);
+                    arr_str_data[2] = dateToDays(arr_str_data[2]);
+                    arr_str_data[3] = dateToDays(arr_str_data[3], obj_today);
+                    return arr_str_data;
+                }
+                else {
+                    return null;
+                }
+            }
+
+
+            var arr_str_rows = str_data.split('\n');
+
+            for (let counter0 = 0; counter0 < arr_str_rows.length; counter0++) {
+                let rowNormalizedTempData
+                if ((rowNormalizedTempData = rowNormalize(arr_str_rows[counter0], rowValidation)) !== null) {
+                    arr_data.push(rowNormalizedTempData);
+                }
+            }
+
+            arr_str_rows.map((str_rowData) => {
+                arr_str_data = str_rowData.split(',');
+                arr_str_data.forEach((str_value) => { return str_value.trim() })
+                var bool_validationResult = rowValidation(arr_str_data);
+
+            })
+
+
+            arr_data.sort(sortArr);
+            return arr_data;
+        }
+
+        //Search for commong projects and calculate days
+        function dataProcess(str_data, rowValidation) {
+            var obj_result = {};
+
+
+            //scaning obj_result to pick record with largest days worked together
+            function pickRecordWithLongestPeriod() {
+                var int_user1;
+                var int_user2;
+                var int_maxDays = -1;
+                for (let user1Temp in obj_result) {
+                    for (let user2Temp in obj_result[user1Temp]) {
+                        if (int_maxDays < obj_result[user1Temp][user2Temp]) {
+                            int_maxDays = obj_result[user1Temp][user2Temp];
+                            int_user1 = user1Temp;
+                            int_user2 = user2Temp;
+                        }
+                    }
+                }
+
+                if (int_maxDays === -1) {
+                    return [];
+                }
+                else {
+                    return [int_user1, int_user2, int_maxDays];
+                }
+            }
+
+
+            //Add record that worked togheter on project
+            /*
+                format:
+                    {
+                        user:{
+                            user: togetherDays,
+                        },
+                        user: {
+                            user: togetherDays,
+                        }
+                    }
+            */
+            function addRecord(int_userID1, int_userID2, int_days) {
+                var int_minUser = Math.min(int_userID1, int_userID2);
+                var int_maxUser = Math.max(int_userID1, int_userID2);
+                if (typeof (obj_result[int_minUser]) === 'undefined') {
+                    obj_result[int_minUser] = {};
+                }
+
+                if (typeof (obj_result[int_minUser][int_maxUser]) === 'undefined') {
+                    obj_result[int_minUser][int_maxUser] = 0;
+                }
+
+                obj_result[int_minUser][int_maxUser] += int_days;
+            }
+
+            function processGroup(int_start, int_end) {
+                if (int_end <= int_start) { //single record for project - no user 2
+                    return 0;
+                }
+
+
+                
+                for (let counter0 = int_start; counter0 < int_end; counter0++) {
+                    for (let counter1 = counter0 + 1; counter1 <= int_end; counter1++) {
+                        //check if users worked together on the project
+                        let int_daysWorkTogether = Math.min(obj_dataNormalized[counter0][3], obj_dataNormalized[counter1][3]) - Math.max(obj_dataNormalized[counter0][2], obj_dataNormalized[counter1][2]); 
+
+                        if (int_daysWorkTogether > 0) { //in case they have days together on the same project we add record
+                            addRecord(obj_dataNormalized[counter0][0], obj_dataNormalized[counter1][0], int_daysWorkTogether)
+                        }
+                    }
+                }
+            }
+
+            str_data = str_data.trim();
+            var obj_dataNormalized = dataNormalize(str_data, rowValidation);
+
+            let int_groupStart = 0;
+            let int_groupEnd = -1
+            for (let counter0 = 1; counter0 < obj_dataNormalized.length; counter0++) { //processing records by groups. 1 group contains all records for specific project
+                if (obj_dataNormalized[int_groupStart][1] === obj_dataNormalized[counter0][1]) {
+                    continue;
+                }
+                else {
+                    int_groupEnd = counter0 - 1;
+                    processGroup(int_groupStart, int_groupEnd);
+                    int_groupStart = counter0;
+                }
+            }
+
+            processGroup(int_groupStart, obj_dataNormalized.length - 1);
+            return pickRecordWithLongestPeriod().join(', ');
+        }
+
+        function fileInputChange(obj_input) {
+            fileReadContent(obj_input, (data) => { document.getElementById('txtDataDisplay').value = data.trim(); document.getElementById('txtDataDisplay').style.display = 'block'; document.getElementById('btnValidate').style.display = 'block' })
+        }
+
+
+        //Sort function for normalized array.
+        //Sorting by projectID, users, start date, end date
+        function sortArr(a, b) {
+            if (a[1] < b[1]) {
+                return -1;
+            }
+            else if (a[1] > b[1]) {
+                return 1;
+            }
+
+            if (a[0] < b[0]) {
+                return -1;
+            }
+            else if (a[0] > b[0]) {
+                return 1;
+            }
+
+            if (a[2] < b[2]) {
+                return -1;
+            }
+            else if (a[2] > b[2]) {
+                return 1;
+            }
+
+            if (a[3] < b[3]) {
+                return -1;
+            }
+            else if (a[3] > b[3]) {
+                return 1;
+            }
+
+            return 0;
+        }
+
+        function btnProcessPress() {
+            document.getElementById('outputHolder').innerHTML = dataProcess(document.getElementById('txtDataDisplay').value, dataRowIsValid);
+            document.getElementById('result').style.display = 'block';
+        }
+    </script>
+    
+</head>
+<body>
+    <div id="centerDiv">
+        <div>select file: <input type="file" id="fileCSV" accept=".csv" onchange="fileInputChange(this)" /></div>
+
+
+        
+        <textarea id="txtDataDisplay"></textarea><br />
+        <input type="button" value="Validate" id="btnValidate" onclick="dataShow(document.getElementById('txtDataDisplay').value, document.getElementById('tblData').tBodies[0], dataRowIsValid)" /><br />
+        <table id="tblData">
+            <thead>
+            <th>&nbsp;</th>
+            <th>EmpID</th>
+            <th>ProjectID</th>
+            <th>DateFrom</th>
+            <th>DateTo</th>
+            </thead>
+            <tbody>
+            </tbody>
+        </table>
+        <br />
+        <input type="button" value="Process" id="btnProcess" onclick="btnProcessPress()" />
+        <div id="result">Result:
+            <div id="outputHolder"></div>
+        </div>
+    </div>
+</body>
+</html>
